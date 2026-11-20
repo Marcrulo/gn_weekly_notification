@@ -1,13 +1,16 @@
-# Mailing list for the weekly canteen menu.
-# One address per line. Blank lines and #-comments are ignored.
-# Everyone here is Bcc'd, so recipients cannot see each other.
+# Mailing list for AI-fred's weekly newsletter.
+# One person per line: the name AI-fred should call them, then the address:
+#     Dr. Bott abott@gnhearing.com      (or: Dr. Bott <abott@gnhearing.com>)
+# The name is used exactly as written, title included. A bare address is
+# greeted as "Esteemed Reader". Blank lines and #-comments are ignored.
+# Everyone gets their own mail, so recipients cannot see each other.
 # Edit, commit, push - the next Sunday run picks it up. No secrets needed.
 
-marcus.presutti.eu@gmail.com
-
-abott@gnhearing.com
-rmartz@gnhearing.com
-cdyssegard@gnhearing.com
-mpresutti@gnhearing.com
-jaolesen@gnhearing.com
-kkegelsorensen@gnhearing.com
+Master Presutti <marcus.presutti.eu@gmail.com>
+Dr. Bott abott@gnhearing.com
+Master Martz rmartz@gnhearing.com
+Master Dyssegard cdyssegard@gnhearing.com
+Master Presutti <mpresutti@gnhearing.com>
+Master Olesen jaolesen@gnhearing.com
+Kris Sørensen kkegelsorensen@gnhearing.com
+Miss Leschly eleschly@gnhearing.com

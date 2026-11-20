@@ -1,4 +1,4 @@
-name: Weekly canteen menu email
+name: AI-fred's weekly newsletter
 
 on:
   schedule:
@@ -10,21 +10,25 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Print the email instead of sending it"
+        description: "Print the newsletter in the log instead of sending it"
         type: boolean
         default: true
-      week:
-        description: "auto (picks the tab holding next Monday), or force 0 / 1"
-        default: "auto"
+      to:
+        description: "Test: send only to this address (leave empty for the whole list)"
+        default: ""
 
 env:
-  # Kept here rather than in classify.py so the model can be swapped without
-  # touching code. classify.py reads OLLAMA_MODEL and falls back to this value.
+  # Kept here rather than in llm.py so the model can be swapped without
+  # touching code. llm.py reads OLLAMA_MODEL and falls back to the same value.
   OLLAMA_MODEL: "qwen3.5:9b"
 
 jobs:
   send:
     runs-on: ubuntu-latest
+    # Write access so the job can commit history.json (what was already sent)
+    # back to the repo after a real send.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -36,11 +40,10 @@ jobs:
         run: python -m unittest discover -s tests
 
       # --- Local model -----------------------------------------------------
-      # Only needed when the site publishes a week with no VEGAN/VEGETARIAN/
-      # FISH DAY prefixes. It is set up unconditionally because that costs a
-      # few runner minutes, while working out in advance whether it is needed
-      # would mean scraping the site twice. Nothing here needs a key: the model
-      # runs on this runner, and classify.py talks to it over localhost.
+      # AI-fred's greeting, letter and farewell are written fresh each week by
+      # a model running on this runner. Nothing here needs a key: llm.py talks
+      # to it over localhost. If any of this fails, the newsletter still goes
+      # out with AI-fred's template words.
       - name: Install Ollama
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
@@ -75,28 +78,37 @@ jobs:
           curl -sf http://localhost:11434/api/tags >/dev/null \
             || { echo "Ollama did not come up"; exit 1; }
           ollama pull "$OLLAMA_MODEL"
-          # Fail loudly here rather than let classify.py quietly mail an
-          # untagged week because the weights never arrived.
+          # Fail loudly here rather than quietly mail template words because
+          # the weights never arrived.
           ollama list | grep -q "$OLLAMA_MODEL" \
             || { echo "$OLLAMA_MODEL is not available"; exit 1; }
-
-      # Most weeks the site tags itself and the model is never asked, so a
-      # manual run also classifies the untagged fixture to prove the model
-      # works on this runner. Skipped on the schedule: it adds ~3 minutes.
-      - name: Check the model on an untagged week
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        env:
-          OLLAMA_LIVE: "1"
-        run: python -m unittest -v tests.test_classify.TestLive
       # ---------------------------------------------------------------------
 
-      - name: Preview the email in the log
-        run: python notify.py --week "${{ inputs.week || 'auto' }}" --dry-run
-
+      # One step builds and sends, so the issue printed in the log is exactly
+      # the one that was mailed (the comic is random, the letter is sampled).
       # Server and mailing list live in the repo (notify.py, recipients.txt).
-      # The app password is still the only secret.
-      - name: Send
-        if: ${{ inputs.dry_run != true }}
+      # The app password is the only secret.
+      - name: Build and send
         env:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-        run: python notify.py --week "${{ inputs.week || 'auto' }}"
+          DRY_RUN: ${{ inputs.dry_run }}
+          TO: ${{ inputs.to }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "$TO" ]; then args+=(--to "$TO"); fi
+          python notify.py "${args[@]}"
+
+      # notify.py appended this week's joke id, paper ids and xkcd number to
+      # history.json (only on a send to the whole list); commit it so next
+      # week skips them. Without this the newsletter would repeat itself.
+      - name: Remember what was sent
+        # On the schedule `inputs` is empty, so both are falsy and this runs.
+        if: ${{ !inputs.dry_run && !inputs.to }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Record the newsletter sent $(date -u +%F)"
+          git push
