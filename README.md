@@ -48,6 +48,7 @@ OLLAMA_MODEL=qwen3:8b python notify.py --dry-run   # or whatever you have pulled
 | `history.json` | Joke ids, paper ids and xkcd numbers already sent — committed back by the workflow |
 | `tests/` | Offline unit tests |
 | `.github/workflows/ai-fred-newsletter.yml` | Sunday 23:05 Danish time |
+| `.github/workflows/test-send.yml` | Manual only: a real send to marcus.presutti.eu@gmail.com alone, history untouched |
 
 ## The mailing list
 

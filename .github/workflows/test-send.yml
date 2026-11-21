@@ -1,0 +1,67 @@
+name: "AI-fred test send (Marcus only)"
+
+# A full, real run of the newsletter - live sources, Bonsai on the runner, a
+# real mail - that only ever goes to one address. Manual only: no schedule.
+#
+# Uses --to, so history.json is not touched: a test does not use up next
+# Sunday's joke, papers or comic. notify.py's ALLOWED_RECIPIENTS would refuse
+# any other address anyway.
+on:
+  workflow_dispatch:
+
+env:
+  OLLAMA_MODEL: "MobiusDevelopment/Bonsai-27B-Q1_0-gguf"
+  TEST_RECIPIENT: "marcus.presutti.eu@gmail.com"
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read  # never commits anything
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run tests
+        run: python -m unittest discover -s tests
+
+      # Same model setup as ai-fred-newsletter.yml; see the comments there.
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          sudo systemctl stop ollama 2>/dev/null || true
+          sudo systemctl disable ollama 2>/dev/null || true
+
+      - name: Cache the model
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama/models
+          key: ollama-${{ env.OLLAMA_MODEL }}
+
+      - name: Start Ollama and load the model
+        run: |
+          export OLLAMA_MODELS="$HOME/.ollama/models"
+          nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/api/tags >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:11434/api/tags >/dev/null \
+            || { echo "Ollama did not come up"; exit 1; }
+          ollama pull "$OLLAMA_MODEL"
+          ollama list | grep -q "$OLLAMA_MODEL" \
+            || { echo "$OLLAMA_MODEL is not available"; exit 1; }
+
+      # Timed, so the log shows how long Bonsai takes on this runner.
+      - name: Build and send to ${{ env.TEST_RECIPIENT }}
+        env:
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: time python notify.py --to "$TEST_RECIPIENT"
+
+      # If AI-fred fell back to his template words, this shows why.
+      - name: Ollama log
+        if: always()
+        run: tail -n 50 "$RUNNER_TEMP/ollama.log" || true
