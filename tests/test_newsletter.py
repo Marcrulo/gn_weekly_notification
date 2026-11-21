@@ -2,6 +2,7 @@
 sources._get_json and the model call are swapped for stubs."""
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -19,10 +20,10 @@ from newsletter import EMOJI, PLACEHOLDER, Words  # noqa: E402
 
 
 class Stubbed(unittest.TestCase):
-    def stub(self, fn):
-        original = sources._get_json
-        sources._get_json = fn
-        self.addCleanup(setattr, sources, "_get_json", original)
+    def stub(self, fn, image=b"PNG"):
+        for name, value in (("_get_json", fn), ("_get_bytes", lambda url: image)):
+            self.addCleanup(setattr, sources, name, getattr(sources, name))
+            setattr(sources, name, value)
 
 
 def write_list(text):
@@ -85,7 +86,8 @@ class TestNoRepeats(Stubbed):
                     {"title": "329: Turing Test"}, {"title": "1263: Reassuring"}, {"title": "unixkcd"}]}}
             return {"safe_title": "Reassuring", "img": "i.png", "alt": "a"}
         self.stub(fake)
-        self.assertEqual(sources.comic({329}).num, 1263)
+        found = sources.comic({329})
+        self.assertEqual((found.num, found.image), (1263, b"PNG"))
         self.assertIsNone(sources.comic({329, 1263}))
 
 
@@ -97,6 +99,30 @@ class TestSafety(unittest.TestCase):
 
     def test_repo_list_is_inside_the_allowlist(self):
         notify.check_allowed(notify.recipients())
+
+    def test_mail_carries_the_comic_as_an_inline_image(self):
+        sent = []
+
+        class FakeSMTP:
+            def __init__(self, *a, **k): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def starttls(self): pass
+            def login(self, *a): pass
+            def send_message(self, mail): sent.append(mail)
+        original = notify.smtplib.SMTP
+        notify.smtplib.SMTP = FakeSMTP
+        self.addCleanup(setattr, notify.smtplib, "SMTP", original)
+        os.environ["SMTP_PASSWORD"] = "x"
+        self.addCleanup(os.environ.pop, "SMTP_PASSWORD")
+        html = newsletter.html(issue(), "x")
+        notify.send_each([("x", "marcus.presutti.eu@gmail.com", "s", "t", html)],
+                         images=newsletter.images(issue()))
+        [mail] = sent
+        [image] = [part for part in mail.walk() if part.get_content_maintype() == "image"]
+        self.assertEqual(image["Content-ID"], "<xkcd-comic>")
+        self.assertEqual(image.get_content(), b"PNGDATA")
+        self.assertIn('src="cid:xkcd-comic"', mail.get_body(("html",)).get_content())
 
     def test_send_refuses_before_connecting(self):
         connected = []
@@ -171,7 +197,8 @@ def issue(words=None):
         sources.Stock("GN", "DKK", [(date(2026, 11, 13), 100.0), (date(2026, 11, 20), 110.0)], 1),
         [sources.Paper("2611.12345", "Paper <one>", "Sum.", 9,
                        list_url="https://huggingface.co/papers/week/2026-W47")],
-        sources.Comic(329, "Turing Test", "i.png", "alt"),
+        sources.Comic(329, "Turing Test", "https://imgs.xkcd.com/comics/turing_test.png", "alt",
+                      image=b"PNGDATA"),
         sources.Joke(7, "Why?", "Because."),
         words=words or Words(f"Good evening, {PLACEHOLDER}.", "Hello & welcome.", "Farewell, kind soul."),
     )
@@ -274,7 +301,7 @@ class TestRender(unittest.TestCase):
         # intro, stock, xkcd, papers, joke, farewell
         W, S = newsletter.WHITE, newsletter.SHADE
         self.assertEqual(cells, [W, S, W, S, W, S])
-        order = [html.index(h) for h in ("GN · GN.CO", ">xkcd<", "ML papers of the week",
+        order = [html.index(h) for h in ("GN · Nasdaq Copenhagen: GN", ">xkcd<", "ML papers of the week",
                                            "Joke of the week")]
         self.assertEqual(order, sorted(order), "xkcd comes right after the stock")
         self.assertNotIn(f"border-top:1px solid {newsletter.RULE}", html)
@@ -295,6 +322,26 @@ class TestRender(unittest.TestCase):
         self.assertRegex(html, r'<a href="https://huggingface.co/papers/week/2026-W47" '
                                r'[^>]*>&#9650; 9 upvotes on Hugging Face')
         self.assertIn("https://huggingface.co/papers/week/2026-W47", newsletter.text(issue(), "x"))
+
+    def test_comic_is_embedded_not_linked(self):
+        html = newsletter.html(issue(), "x")
+        self.assertIn('src="cid:xkcd-comic"', html)
+        self.assertNotIn('src="https://imgs.xkcd.com', html)
+        self.assertEqual(newsletter.images(issue()), [("xkcd-comic", b"PNGDATA", "png")])
+        # A browser preview cannot resolve cid:, so it links the image instead.
+        self.assertIn('src="https://imgs.xkcd.com/comics/turing_test.png"',
+                      newsletter.html(issue(), "x", embedded=False))
+
+    def test_failed_download_falls_back_to_the_link(self):
+        bare = issue()
+        bare.comic.image = b""
+        self.assertIn('src="https://imgs.xkcd.com/comics/turing_test.png"', newsletter.html(bare, "x"))
+        self.assertEqual(newsletter.images(bare), [])
+
+    def test_stock_is_never_written_as_a_domain(self):
+        for out in (newsletter.html(issue(), "x"), newsletter.text(issue(), "x")):
+            self.assertNotIn("GN.CO", out)
+            self.assertIn("Nasdaq Copenhagen: GN", out)
 
     def test_no_explain_xkcd_link(self):
         self.assertNotIn("explainxkcd", newsletter.html(issue(), "x"))

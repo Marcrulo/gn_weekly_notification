@@ -252,7 +252,7 @@ def text(issue: Issue, name: str | None) -> str:
     out = [w.greet(name), "", w.letter]
     if issue.stock:
         s = issue.stock
-        out += ["", f"== {s.name.upper()} ({sources.STOCK_SYMBOL}) =="]
+        out += ["", f"== {s.name.upper()} ({sources.STOCK_LABEL}) =="]
         (first_day, first), (_, last) = s.month[0], s.month[-1]
         out.append(f"  Month: {first:.2f} on {first_day:%d/%m} -> {last:.2f} {s.currency} "
                    f"({100 * (last - first) / first:+.1f}%)")
@@ -278,6 +278,12 @@ def text(issue: Issue, name: str | None) -> str:
 
 
 # --- HTML ------------------------------------------------------------------
+
+
+def images(issue: Issue) -> list[tuple[str, bytes, str]]:
+    """(content id, data, image subtype) for each image to embed in the mail."""
+    c = issue.comic
+    return [(COMIC_CID, c.image, c.image_subtype)] if c and c.image else []
 
 
 def _heading(label: str) -> str:
@@ -363,12 +369,17 @@ def _papers_html(papers: list[sources.Paper]) -> str:
     )
 
 
-def _comic_html(c: sources.Comic) -> str:
+# Content-ID of the comic image attached to the mail; the HTML points at it.
+COMIC_CID = "xkcd-comic"
+
+
+def _comic_html(c: sources.Comic, embedded: bool) -> str:
+    src = f"cid:{COMIC_CID}" if embedded and c.image else c.img
     return (
         f'<a href="{escape(c.url)}" style="font-family:{SERIF};font-size:17px;font-weight:700;color:{INK};'
         f'text-decoration:none;">{c.num}: {escape(c.title)}</a>'
         f'<div style="padding:10px 0;"><a href="{escape(c.url)}">'
-        f'<img src="{escape(c.img)}" alt="{escape(c.alt)}" title="{escape(c.alt)}" '
+        f'<img src="{escape(src)}" alt="{escape(c.alt)}" title="{escape(c.alt)}" '
         f'style="max-width:100%;height:auto;border:0;"></a></div>'
         f'<div style="font-size:13px;font-style:italic;color:{MUTED};">{escape(c.alt)}</div>'
     )
@@ -381,18 +392,20 @@ def _joke_html(j: sources.Joke) -> str:
     return f'<div style="font-size:15px;line-height:1.5;color:{BODY};">{setup}</div>{punch}'
 
 
-def html(issue: Issue, name: str | None) -> str:
+def html(issue: Issue, name: str | None, embedded: bool = True) -> str:
+    """The HTML mail. `embedded`: the comic is referenced as an attachment of
+    the mail (see `images`); pass False for a file to open in a browser."""
     w = issue.words
     # (label, render, forced background). Rendered once the background is known.
     parts = []
     if issue.stock:
         # The chart's latest-week band must stand out from the section behind it.
-        parts.append((f"{issue.stock.name} · {sources.STOCK_SYMBOL}",
+        parts.append((f"{issue.stock.name} · {sources.STOCK_LABEL}",
                       lambda bg: _stock_html(issue.stock, band=SHADE if bg == WHITE else WHITE),
                       None))
     if issue.comic:
         # Always on white: the comic is a white image and looks pasted-on over grey.
-        parts.append(("xkcd", lambda bg: _comic_html(issue.comic), WHITE))
+        parts.append(("xkcd", lambda bg: _comic_html(issue.comic, embedded), WHITE))
     if issue.papers:
         parts.append(("ML papers of the week", lambda bg: _papers_html(issue.papers), None))
     if issue.joke:

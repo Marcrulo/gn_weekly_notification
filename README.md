@@ -128,9 +128,9 @@ Warnings go to stderr, so check the job log if a section is missing.
 | Section | Source | Never repeats by |
 | --- | --- | --- |
 | Joke | [JokeAPI](https://v2.jokeapi.dev/) `Programming`, `safe-mode` plus every flag blacklisted | joke `id` |
-| Stock | Yahoo Finance chart endpoint for `GN.CO` (no key; unofficial, so it can change) | — |
+| Stock | Yahoo Finance chart endpoint for `GN.CO` (no key; unofficial, so it can change). Shown in the mail as "Nasdaq Copenhagen: GN" — written as `GN.CO`, mail clients link it to the gn.co website | — |
 | Papers | Hugging Face `api/daily_papers?week=YYYY-Www`, top 3 by upvotes; fallback alphaXiv `papers/v3/feed` (Hot, 7 days; undocumented) | paper id |
-| xkcd | [explainxkcd](https://www.explainxkcd.com/wiki/index.php/Category:Comics_by_topic) categories → `xkcd.com/N/info.0.json` for the image | comic number |
+| xkcd | Image downloaded and embedded in the mail (clients often block remote images). [explainxkcd](https://www.explainxkcd.com/wiki/index.php/Category:Comics_by_topic) categories → `xkcd.com/N/info.0.json` for the image | comic number |
 
 - **Stock:** every close of the last month as a column chart; the latest week
   (the trading days in the same ISO week as the last close) is coloured green

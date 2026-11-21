@@ -99,7 +99,8 @@ def _password(user: str) -> str:
     return password
 
 
-def send_each(mails: list[tuple[str, str, str, str, str]]) -> None:
+def send_each(mails: list[tuple[str, str, str, str, str]],
+              images: list[tuple[str, bytes, str]] = ()) -> None:
     """Send personal mails over one SMTP session.
 
     Each item is (name, address, subject, text, html). Every recipient gets
@@ -127,6 +128,11 @@ def send_each(mails: list[tuple[str, str, str, str, str]]) -> None:
             # multipart/alternative: clients that cannot render HTML show `text`.
             mail.set_content(text)
             mail.add_alternative(html, subtype="html")
+            # Embedded images (the comic): attached to the HTML part, which
+            # refers to each as src="cid:<id>". Nothing to load from the web.
+            html_part = mail.get_body(("html",))
+            for cid, data, subtype in images:
+                html_part.add_related(data, "image", subtype, cid=f"<{cid}>")
             server.send_message(mail)
 
 
@@ -156,7 +162,8 @@ def main(argv: list[str] | None = None) -> int:
 
     preview_name = to[0][0] if to else ""
     if args.html_out:
-        Path(args.html_out).write_text(newsletter.html(issue, preview_name), encoding="utf-8")
+        Path(args.html_out).write_text(newsletter.html(issue, preview_name, embedded=False),
+                                       encoding="utf-8")
         print(f"Wrote {args.html_out} - open it in a browser to preview.")
         return 0
 
@@ -172,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     send_each([
         (name, address, subject, newsletter.text(issue, name), newsletter.html(issue, name))
         for name, address in to
-    ])
+    ], images=newsletter.images(issue))
     print(f"Sent '{subject}' to {len(to)} recipient(s).")
 
     # Only a send to the real list counts as "used": a --to test run must not

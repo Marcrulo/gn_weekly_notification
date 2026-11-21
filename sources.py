@@ -30,6 +30,12 @@ def _get_json(url: str):
         return json.load(response)
 
 
+def _get_bytes(url: str) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        return response.read()
+
+
 def _warn(section: str, error: Exception) -> None:
     print(f"{section}: left out ({error})", file=sys.stderr)
 
@@ -83,7 +89,10 @@ def joke(seen: set, url: str = JOKE_URL, attempts: int = 5) -> Joke | None:
 
 # --- Stock -----------------------------------------------------------------
 
-STOCK_SYMBOL = "GN.CO"  # GN Store Nord on Nasdaq Copenhagen
+STOCK_SYMBOL = "GN.CO"  # GN Store Nord on Nasdaq Copenhagen (Yahoo's ticker)
+# How the stock is named in the mail. Not "GN.CO": mail clients turn that into
+# a link to the gn.co website.
+STOCK_LABEL = "Nasdaq Copenhagen: GN"
 STOCK_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1mo&interval=1d"
 
 
@@ -236,10 +245,20 @@ class Comic:
     title: str
     img: str
     alt: str
+    # The image itself, embedded in the mail: many clients block or fail to
+    # load images from other servers. Empty if the download failed, in which
+    # case the mail falls back to linking `img`.
+    image: bytes = b""
 
     @property
     def url(self) -> str:
         return f"https://xkcd.com/{self.num}/"
+
+    @property
+    def image_subtype(self) -> str:
+        """'png', 'jpeg' or 'gif', from the image's file name."""
+        ext = self.img.rsplit(".", 1)[-1].lower()
+        return "jpeg" if ext in ("jpg", "jpeg") else ext if ext in ("png", "gif") else "png"
 
 
 def comic_numbers(categories=XKCD_CATEGORIES) -> set[int]:
@@ -268,7 +287,12 @@ def comic(seen: set, rng: random.Random | None = None) -> Comic | None:
             raise LookupError("every comic in the categories has been sent")
         num = (rng or random).choice(candidates)
         data = _get_json(f"https://xkcd.com/{num}/info.0.json")
-        return Comic(num, data["safe_title"], data["img"], data["alt"])
+        comic = Comic(num, data["safe_title"], data["img"], data["alt"])
+        try:
+            comic.image = _get_bytes(comic.img)
+        except Exception as error:  # noqa: BLE001 - a linked image is still better than none
+            _warn("xkcd image (linking it instead)", error)
+        return comic
     except Exception as error:  # noqa: BLE001
         _warn("xkcd", error)
         return None
