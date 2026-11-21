@@ -35,7 +35,22 @@ MAIL_FROM = SMTP_USER  # Gmail rewrites From to the authenticated account anyway
 
 # One person per line; '#' starts a comment. Edit this file to change the list.
 RECIPIENTS_FILE = Path(__file__).resolve().parent / "recipients.txt"
+
+# Hard safety net while the newsletter is being tried out: nothing is ever sent
+# to an address outside this set - not from recipients.txt, not via --to, not
+# from the workflow's `to` input. Add an address here (and uncomment it in
+# recipients.txt) to widen the audience.
+ALLOWED_RECIPIENTS = {"marcus.presutti.eu@gmail.com"}
 # ---------------------------------------------------------------------------
+
+
+def check_allowed(addresses: list[str], allowed: set[str] = ALLOWED_RECIPIENTS) -> None:
+    """Refuse the whole send if any address is outside the allowlist."""
+    blocked = [a for a in addresses if a.lower() not in {x.lower() for x in allowed}]
+    if blocked:
+        raise SystemExit(
+            f"Refusing to send: {', '.join(blocked)} not in ALLOWED_RECIPIENTS (notify.py)."
+        )
 
 
 def _parse_contact(entry: str) -> tuple[str, str]:
@@ -94,6 +109,8 @@ def send_each(mails: list[tuple[str, str, str, str, str]]) -> None:
     port = int(os.environ.get("SMTP_PORT", SMTP_PORT))
     user = os.environ.get("SMTP_USER", SMTP_USER)
     sender = os.environ.get("MAIL_FROM", MAIL_FROM) or user
+    # Checked here, right before connecting, so no caller can get around it.
+    check_allowed([address for _, address, *_ in mails])
     password = _password(user)
 
     server = smtplib.SMTP_SSL(host, port, timeout=30) if port == 465 else smtplib.SMTP(host, port, timeout=30)
@@ -129,6 +146,9 @@ def main(argv: list[str] | None = None) -> int:
     # recipients.txt where one is listed there.
     names = {address: name for name, address in contacts()}
     to = [(names.get(a, ""), a) for a in args.to] if args.to else contacts()
+    if not (args.dry_run or args.html_out):
+        # Fail before minutes of model time, not after. send_each checks again.
+        check_allowed([address for _, address in to])
 
     history = sources.load_history()
     issue = newsletter.gather(history)

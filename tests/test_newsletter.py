@@ -2,6 +2,7 @@
 sources._get_json and the model call are swapped for stubs."""
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -74,6 +75,8 @@ class TestNoRepeats(Stubbed):
         found = sources.papers({"b"}, today=date(2026, 11, 20), count=2)
         self.assertEqual([p.id for p in found], ["c", "d"])
         self.assertEqual(found[0].summary, "S.")
+        self.assertEqual(found[0].url, "https://arxiv.org/abs/c")
+        self.assertEqual(found[0].list_url, "https://huggingface.co/papers/week/2026-W47")
 
     def test_comic_skips_seen_numbers(self):
         def fake(url):
@@ -86,11 +89,88 @@ class TestNoRepeats(Stubbed):
         self.assertIsNone(sources.comic({329, 1263}))
 
 
+class TestSafety(unittest.TestCase):
+    def test_only_the_allowlist_is_mailed(self):
+        notify.check_allowed(["marcus.presutti.eu@gmail.com", "Marcus.Presutti.EU@gmail.com"])
+        with self.assertRaises(SystemExit):
+            notify.check_allowed(["marcus.presutti.eu@gmail.com", "abott@gnhearing.com"])
+
+    def test_repo_list_is_inside_the_allowlist(self):
+        notify.check_allowed(notify.recipients())
+
+    def test_send_refuses_before_connecting(self):
+        connected = []
+        original = notify.smtplib.SMTP
+        notify.smtplib.SMTP = lambda *a, **k: connected.append(a)
+        self.addCleanup(setattr, notify.smtplib, "SMTP", original)
+        with self.assertRaises(SystemExit):
+            notify.send_each([("", "someone@else.dk", "s", "t", "h")])
+        self.assertEqual(connected, [])
+
+
+def yahoo(points):
+    from datetime import datetime, timezone
+    stamps = [int(datetime(d.year, d.month, d.day, 8, tzinfo=timezone.utc).timestamp()) for d, _ in points]
+    return {"chart": {"result": [{"meta": {"shortName": "GN Store Nord", "currency": "DKK"},
+                                  "timestamp": stamps,
+                                  "indicators": {"quote": [{"close": [c for _, c in points]}]}}]}}
+
+
+class TestStock(Stubbed):
+    def test_month_with_the_latest_week_marked(self):
+        # Thu 12/11, Fri 13/11, then Mon 16 .. Wed 18/11 (a short week), one null.
+        points = [(date(2026, 11, 12), 90.0), (date(2026, 11, 13), 100.0),
+                  (date(2026, 11, 16), 104.0), (date(2026, 11, 17), None), (date(2026, 11, 18), 95.0)]
+        self.stub(lambda url: yahoo(points))
+        s = sources.stock()
+        self.assertEqual(len(s.month), 4)
+        self.assertEqual([d.day for d, _ in s.week], [16, 18])
+        self.assertEqual(s.previous_close, 100.0)
+        self.assertAlmostEqual(s.change_pct, -5.0)
+
+    def test_chart_highlights_only_the_latest_week(self):
+        html = newsletter._stock_html(issue().stock)
+        self.assertEqual(html.count(f"background:{newsletter.PAST};"), 1)
+        self.assertEqual(html.count(f"background:{newsletter.UP};"), 1)
+        self.assertIn("+10.0%", html)
+
+
+class TestPaperSources(Stubbed):
+    def test_falls_back_to_alphaxiv(self):
+        def fake(url):
+            if "huggingface" in url:
+                raise ConnectionError("down")
+            return {"papers": [{"id": "u1", "universal_paper_id": "2611.1", "title": "Seen"},
+                               {"id": "u2", "universal_paper_id": "2611.22222", "title": "New  one",
+                                "feed_description": "Does X.", "metrics": {"public_total_votes": 4}}]}
+        self.stub(fake)
+        [paper] = sources.papers({"2611.1"}, today=date(2026, 11, 22))
+        self.assertEqual((paper.title, paper.source, paper.upvotes), ("New one", "alphaXiv", 4))
+        self.assertEqual(paper.url, "https://arxiv.org/abs/2611.22222")
+        self.assertEqual(paper.list_url, sources.ALPHAXIV_WEEK_PAGE)
+
+    def test_alphaxiv_only_papers_link_to_alphaxiv(self):
+        def fake(url):
+            if "huggingface" in url:
+                raise ConnectionError("down")
+            return {"papers": [{"id": "u", "universal_paper_id": "2611.harness-cg", "title": "T"}]}
+        self.stub(fake)
+        [paper] = sources.papers(set(), today=date(2026, 11, 22))
+        self.assertEqual(paper.url, "https://www.alphaxiv.org/abs/2611.harness-cg")
+
+    def test_both_down_leaves_the_section_out(self):
+        def fake(url):
+            raise ConnectionError("down")
+        self.stub(fake)
+        self.assertIsNone(sources.papers(set(), today=date(2026, 11, 22)))
+
+
 def issue(words=None):
     return newsletter.Issue(
         date(2026, 11, 22),
-        sources.Stock("GN", "DKK", [(date(2026, 11, 20), 110.0)], 100.0),
-        [sources.Paper("2611.1", "Paper <one>", "Sum.", 9)],
+        sources.Stock("GN", "DKK", [(date(2026, 11, 13), 100.0), (date(2026, 11, 20), 110.0)], 1),
+        [sources.Paper("2611.12345", "Paper <one>", "Sum.", 9,
+                       list_url="https://huggingface.co/papers/week/2026-W47")],
         sources.Comic(329, "Turing Test", "i.png", "alt"),
         sources.Joke(7, "Why?", "Because."),
         words=words or Words(f"Good evening, {PLACEHOLDER}.", "Hello & welcome.", "Farewell, kind soul."),
@@ -102,7 +182,7 @@ def reply(**pieces):
 
 
 class TestAIfred(unittest.TestCase):
-    def test_the_model_is_asked_once_with_the_facts(self):
+    def test_the_model_is_asked_once_and_told_nothing_specific(self):
         seen = []
 
         def call(request):
@@ -111,9 +191,10 @@ class TestAIfred(unittest.TestCase):
                                "farewell": "Bye"})
         words = newsletter.write(issue(), call=call)
         self.assertEqual(len(seen), 1)
-        self.assertIn("rose 10.0%", seen[0]["messages"][1]["content"])
-        self.assertIn("Turing Test", seen[0]["messages"][1]["content"])
-        self.assertNotIn("Because.", seen[0]["messages"][1]["content"], "never spoil the joke")
+        prompt = seen[0]["messages"][1]["content"]
+        # The intro is generic: no numbers, titles or punchlines reach the model.
+        for detail in ("10.0", "110", "Turing Test", "Paper <one>", "Why?", "Because."):
+            self.assertNotIn(detail, prompt)
         self.assertEqual(words.greet("Dr. Bott"), "Hello Dr. Bott")
 
     def test_model_failure_falls_back_to_the_template(self):
@@ -121,7 +202,7 @@ class TestAIfred(unittest.TestCase):
             raise ConnectionError("no ollama")
         words = newsletter.write(issue(), call=broken)
         self.assertIn(PLACEHOLDER, words.greeting)
-        self.assertIn("rose 10.0%", words.letter)
+        self.assertNotIn("10.0", words.letter)
         self.assertIn(EMOJI, words.letter)
 
     def test_garbage_reply_falls_back(self):
@@ -134,10 +215,22 @@ class TestAIfred(unittest.TestCase):
         self.assertEqual(words.greet("Miss Leschly"), "Dear Miss Leschly, good evening, sir.")
 
     def test_placeholder_variants_and_duplicates(self):
-        words = newsletter.write(issue(), call=reply(greeting="Ah, { NAME }! Yes, {name}.",
+        words = newsletter.write(issue(), call=reply(greeting="Ah, { NAME } and {name}.",
                                                      letter=f"Hi {PLACEHOLDER}", farewell="F"))
-        self.assertEqual(words.greet("Dr. Bott"), "Ah, Dr. Bott! Yes, .")
+        self.assertEqual(words.greet("Dr. Bott"), "Ah, Dr. Bott and .")
         self.assertNotIn(PLACEHOLDER, words.letter)
+
+    def test_long_intro_is_cut_to_two_sentences(self):
+        words = newsletter.write(issue(), call=reply(
+            greeting=f"Hi {PLACEHOLDER}", letter="One. Two! Three? Four.", farewell="A. B. C. D."))
+        self.assertTrue(words.letter.startswith("One. Two!"))
+        self.assertNotIn("Three", words.letter)
+        self.assertEqual(words.farewell, "A. B. C.")
+
+    def test_greeting_is_cut_to_one_sentence(self):
+        words = newsletter.write(issue(), call=reply(
+            greeting=f"Dear {PLACEHOLDER}, welcome. Please accept my bow.", letter="L", farewell="F"))
+        self.assertEqual(words.greet("Dr. Bott"), "Dear Dr. Bott, welcome.")
 
     def test_emoji_is_guaranteed(self):
         words = newsletter.write(issue(), call=reply(greeting=f"Hi {PLACEHOLDER}", letter="L",
@@ -171,12 +264,49 @@ class TestRender(unittest.TestCase):
         self.assertNotIn("xkcd", html)
         self.assertIn("Farewell", html)
 
-    def test_subject(self):
-        self.assertEqual(newsletter.subject(issue()), f"{EMOJI} AI-fred's weekly · Week 47")
+    def test_subject_names_the_week_that_starts_tomorrow(self):
+        # Sunday 22/11/2026 closes ISO week 47; the issue opens week 48.
+        self.assertEqual(newsletter.subject(issue()), f"{EMOJI} AI-fred's weekly · Week 48")
+
+    def test_sections_alternate_white_and_shaded(self):
+        html = newsletter.html(issue(), "x")
+        cells = re.findall(r'<td style="padding:[^"]*background:(#[0-9a-f]{6});', html)
+        # intro, stock, xkcd, papers, joke, farewell
+        W, S = newsletter.WHITE, newsletter.SHADE
+        self.assertEqual(cells, [W, S, W, S, W, S])
+        order = [html.index(h) for h in ("GN · GN.CO", ">xkcd<", "ML papers of the week",
+                                           "Joke of the week")]
+        self.assertEqual(order, sorted(order), "xkcd comes right after the stock")
+        self.assertNotIn(f"border-top:1px solid {newsletter.RULE}", html)
+
+    def test_xkcd_stays_white_without_the_stock(self):
+        bare = issue()
+        bare.stock = None
+        html = newsletter.html(bare, "x")
+        cells = re.findall(r'<td style="padding:[^"]*background:(#[0-9a-f]{6});', html)
+        W, S = newsletter.WHITE, newsletter.SHADE
+        # intro, xkcd (forced white, with a hairline), papers, joke, farewell
+        self.assertEqual(cells, [W, W, S, W, S])
+        self.assertIn(f"border-top:1px solid {newsletter.RULE}", html)
+
+    def test_paper_title_links_the_article_and_upvotes_the_week(self):
+        html = newsletter.html(issue(), "x")
+        self.assertIn('<a href="https://arxiv.org/abs/2611.12345" ', html)
+        self.assertRegex(html, r'<a href="https://huggingface.co/papers/week/2026-W47" '
+                               r'[^>]*>&#9650; 9 upvotes on Hugging Face')
+        self.assertIn("https://huggingface.co/papers/week/2026-W47", newsletter.text(issue(), "x"))
+
+    def test_no_explain_xkcd_link(self):
+        self.assertNotIn("explainxkcd", newsletter.html(issue(), "x"))
+
+    def test_ai_fred_knows_the_week_starts_tomorrow(self):
+        text = newsletter.facts(issue(), mood="calm")
+        self.assertIn("Sunday 22 November 2026, in the evening", text)
+        self.assertIn("On Monday 23 November, week 48 begins", text)
 
     def test_record_appends_what_was_sent(self):
         history = newsletter.record(issue(), {"jokes": [1], "papers": [], "xkcd": []})
-        self.assertEqual(history, {"jokes": [1, 7], "papers": ["2611.1"], "xkcd": [329]})
+        self.assertEqual(history, {"jokes": [1, 7], "papers": ["2611.12345"], "xkcd": [329]})
 
 
 if __name__ == "__main__":

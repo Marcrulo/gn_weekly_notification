@@ -1,14 +1,16 @@
 # AI-fred's weekly
 
 A weekly newsletter, mailed every Sunday by **AI-fred** 🧐 — an absurdly
-polite butler of a robot — to everyone in `recipients.txt`. Each issue holds:
+polite butler of a robot — to everyone in `recipients.txt`. It goes out on
+Sunday evening and opens the coming week (the subject names that week). Each
+issue holds:
 
-1. **A greeting and letter from AI-fred**, addressed to each reader by name
-2. **GN Store Nord (CPH: GN)** — the last five trading days, with the week's change
-3. **ML papers of the week** — the three most upvoted on Hugging Face
+1. **A greeting and a short, generic intro from AI-fred**, addressed to each reader by name
+2. **GN Store Nord (CPH: GN)** — a chart of the last month, latest week highlighted
+3. **ML papers of the week** — the three most upvoted on Hugging Face (alphaXiv if it is down)
 4. **An xkcd** — from the *Artificial Intelligence* or *Computers* topic
 5. **A programming joke** — safe-mode, from JokeAPI
-6. **AI-fred's farewell**, signed
+6. **AI-fred's farewell** into the new week, signed
 
 AI-fred's words are written from scratch every week by a language model that
 runs on the GitHub Actions runner itself. The joke, papers and comic never
@@ -30,7 +32,7 @@ so the three commands above work anywhere. To hear him properly, run the model
 locally — any Ollama model works for a preview:
 
 ```bash
-ollama pull qwen3.5:9b                          # what the workflow uses
+ollama pull MobiusDevelopment/Bonsai-27B-Q1_0-gguf   # what the workflow uses
 OLLAMA_MODEL=qwen3:8b python notify.py --dry-run   # or whatever you have pulled
 ```
 
@@ -45,7 +47,7 @@ OLLAMA_MODEL=qwen3:8b python notify.py --dry-run   # or whatever you have pulled
 | `recipients.txt` | The mailing list, with the name AI-fred calls each person — **edit this to add people** |
 | `history.json` | Joke ids, paper ids and xkcd numbers already sent — committed back by the workflow |
 | `tests/` | Offline unit tests |
-| `.github/workflows/weekly-menu-email.yml` | Sunday cron |
+| `.github/workflows/ai-fred-newsletter.yml` | Sunday 23:05 Danish time |
 
 ## The mailing list
 
@@ -100,14 +102,21 @@ Small models slip, so the reply is repaired rather than discarded:
 
 ### The model
 
-`qwen3.5:9b` (~7.6 GB) via [Ollama](https://ollama.com), on the runner, over
-`localhost:11434`. No key, no account, no per-call cost, nothing leaves the
+PrismML's 1-bit **Bonsai 27B**
+([`MobiusDevelopment/Bonsai-27B-Q1_0-gguf`](https://ollama.com/MobiusDevelopment/Bonsai-27B-Q1_0-gguf),
+a community upload, ~4.4 GB, needs Ollama ≥ 0.32.5) via
+[Ollama](https://ollama.com), on the runner, over `localhost:11434`. At 1 bit a
+27B model fits the 16 GB runner. No key, no account, no per-call cost, nothing leaves the
 runner. Set `OLLAMA_MODEL` in the workflow to swap it; `OLLAMA_HOST` points at
-a different server. Requests send `"think": false` — Qwen 3.x otherwise reasons
-first, which costs minutes on a CPU for no visible gain in a letter.
+a different server. Requests send `"think": false` — the Qwen-based model
+otherwise reasons first, which costs minutes on a CPU for no visible gain.
 
-On a laptop CPU, `qwen3:8b` takes 60–110 s for the three pieces; expect a few
-minutes on the 4-core runner. The client timeout is 15 minutes.
+The model ignores word limits, so `_repair` keeps the first two sentences of
+the intro, one of the greeting and three of the farewell rather than discarding
+the reply. The model is told nothing about the issue's contents, so the intro
+stays generic and cannot misquote a number.
+
+Expect a few minutes on the 4-core runner (it has not been timed there yet). The client timeout is 15 minutes.
 
 ## The sections
 
@@ -119,12 +128,14 @@ Warnings go to stderr, so check the job log if a section is missing.
 | --- | --- | --- |
 | Joke | [JokeAPI](https://v2.jokeapi.dev/) `Programming`, `safe-mode` plus every flag blacklisted | joke `id` |
 | Stock | Yahoo Finance chart endpoint for `GN.CO` (no key; unofficial, so it can change) | — |
-| Papers | Hugging Face `api/daily_papers?week=YYYY-Www`, top 3 by upvotes | arXiv id |
+| Papers | Hugging Face `api/daily_papers?week=YYYY-Www`, top 3 by upvotes; fallback alphaXiv `papers/v3/feed` (Hot, 7 days; undocumented) | paper id |
 | xkcd | [explainxkcd](https://www.explainxkcd.com/wiki/index.php/Category:Comics_by_topic) categories → `xkcd.com/N/info.0.json` for the image | comic number |
 
-- **Stock:** the last five closes and the change from the close before them.
-  The bars are plain table cells, because Gmail renders neither SVG nor
-  inline charts.
+- **Stock:** every close of the last month as a column chart; the latest week
+  (the trading days in the same ISO week as the last close) is coloured green
+  or red on a tinted band, with its closes labelled. The headline change is
+  that week's, from the close before it. The bars are plain table cells,
+  because Gmail renders neither SVG nor inline charts.
 - **Papers:** the ISO week of the run (the job runs on Sunday, so the week just
   ending). If every top paper has been sent, it moves down the list.
 - **xkcd:** a random pick from the ~230 comics in *Artificial Intelligence* and
@@ -149,6 +160,7 @@ delete it from the file.
 | --- | --- |
 | SMTP server, port, account, From | `SMTP_HOST` … `MAIL_FROM` at the top of `notify.py` |
 | Mailing list | `recipients.txt` |
+| Who may be mailed at all | `ALLOWED_RECIPIENTS` in `notify.py` — anything else is refused, `--to` included |
 | **App password** | GitHub secret `SMTP_PASSWORD` — the only secret |
 | AI-fred's model | No secret: it runs on the runner |
 
@@ -161,9 +173,14 @@ same name as an override.
 
 ### The workflow
 
-The schedule is `23 15 * * 0` (Sunday 15:23 UTC). The odd minute is
-deliberate: GitHub can *drop* scheduled jobs at peak times, and the start of
-every hour is peak.
+It runs **Sunday at 23:05 Danish time**, all year. GitHub's cron is UTC only,
+so two schedules are set — `5 21 * * 0` (23:05 in summer, CEST) and
+`5 22 * * 0` (23:05 in winter, CET) — and a small `timing` job lets through
+only the one that matches Copenhagen's offset that day; the other run ends
+there as "skipped". It decides by which schedule fired, not by the clock, so a
+run GitHub starts late is still handled right. Five past rather than on the
+hour because GitHub can *drop* scheduled jobs at peak times, and the top of
+every hour is peak. Expect some delay regardless.
 
 Steps: run the tests → install Ollama → restore the model from the Actions
 cache (or pull it) → **build and send** → commit `history.json`. Building and

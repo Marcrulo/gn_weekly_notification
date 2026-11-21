@@ -2,11 +2,13 @@ name: AI-fred's weekly newsletter
 
 on:
   schedule:
-    # 15:23 UTC every Sunday (17:23 Danish summer time, 16:23 in winter).
-    # Deliberately not on the hour: GitHub queues scheduled jobs on shared
-    # capacity and can drop them outright at peak times, which is the start of
-    # every hour.
-    - cron: "23 15 * * 0"
+    # Sunday 23:05 Danish time. GitHub's cron is UTC only, and Denmark is UTC+2
+    # in summer and UTC+1 in winter, so both are scheduled and the `timing` job
+    # below lets through only the one that is 23:05 in Copenhagen that day.
+    # Five past rather than on the hour: GitHub can drop scheduled jobs at peak
+    # times, and the top of every hour is peak.
+    - cron: "5 21 * * 0"  # 23:05 CEST (summer)
+    - cron: "5 22 * * 0"  # 23:05 CET (winter)
   workflow_dispatch:
     inputs:
       dry_run:
@@ -20,10 +22,37 @@ on:
 env:
   # Kept here rather than in llm.py so the model can be swapped without
   # touching code. llm.py reads OLLAMA_MODEL and falls back to the same value.
-  OLLAMA_MODEL: "qwen3.5:9b"
+  OLLAMA_MODEL: "MobiusDevelopment/Bonsai-27B-Q1_0-gguf"
 
 jobs:
+  # Picks the right one of the two schedules. Decided by which cron fired, not
+  # by the clock, so a run GitHub starts late is still judged correctly. The DST
+  # switch happens at 02:00-03:00 on a Sunday, long before 23:05, so the offset
+  # read here is the one in force that evening.
+  timing:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+    steps:
+      - id: check
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [ -z "$SCHEDULE" ]; then
+            echo "Manual run: go."; echo "go=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          offset=$(TZ=Europe/Copenhagen date +%z)   # +0200 summer, +0100 winter
+          if { [ "$offset" = "+0200" ] && [ "$SCHEDULE" = "5 21 * * 0" ]; } ||
+             { [ "$offset" = "+0100" ] && [ "$SCHEDULE" = "5 22 * * 0" ]; }; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Copenhagen is UTC$offset; '$SCHEDULE' is not 23:05 there - skipping."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+
   send:
+    needs: timing
+    if: ${{ needs.timing.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     # Write access so the job can commit history.json (what was already sent)
     # back to the repo after a real send.
@@ -54,7 +83,7 @@ jobs:
           sudo systemctl stop ollama 2>/dev/null || true
           sudo systemctl disable ollama 2>/dev/null || true
 
-      # ~7.6GB of weights. Restoring beats re-downloading, but GitHub evicts
+      # ~4.4GB of weights (Bonsai 27B, 1-bit). Restoring beats re-downloading, but GitHub evicts
       # caches after 7 days of no access and this job runs every 7 days, so
       # expect an occasional miss - it just falls back to pulling.
       - name: Cache the model

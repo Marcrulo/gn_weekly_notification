@@ -13,7 +13,7 @@ import re
 import sys
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -91,19 +91,29 @@ STOCK_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1m
 class Stock:
     name: str
     currency: str
-    days: list[tuple[date, float]]  # the last five trading days, oldest first
-    previous_close: float  # the close before the first of those days
+    month: list[tuple[date, float]]  # every close in the last month, oldest first
+    week_start: int  # index into `month` of the latest week's first trading day
+
+    @property
+    def week(self) -> list[tuple[date, float]]:
+        """The trading days of the latest week (the one ending this Sunday)."""
+        return self.month[self.week_start:]
+
+    @property
+    def previous_close(self) -> float:
+        """The close just before the latest week."""
+        return self.month[self.week_start - 1][1]
 
     @property
     def change(self) -> float:
-        return self.days[-1][1] - self.previous_close
+        return self.month[-1][1] - self.previous_close
 
     @property
     def change_pct(self) -> float:
         return 100 * self.change / self.previous_close
 
 
-def stock(symbol: str = STOCK_SYMBOL, days: int = 5) -> Stock | None:
+def stock(symbol: str = STOCK_SYMBOL) -> Stock | None:
     try:
         result = _get_json(STOCK_URL.format(symbol=urllib.parse.quote(symbol)))["chart"]["result"][0]
         meta = result["meta"]
@@ -112,13 +122,18 @@ def stock(symbol: str = STOCK_SYMBOL, days: int = 5) -> Stock | None:
             for ts, close in zip(result["timestamp"], result["indicators"]["quote"][0]["close"])
             if close is not None
         ]
-        if len(closes) < days + 1:
+        if len(closes) < 2:
             raise LookupError(f"only {len(closes)} closes returned")
+        # The latest week = trading days in the same ISO week as the last close.
+        last_week = closes[-1][0].isocalendar()[:2]
+        start = next(i for i, (d, _) in enumerate(closes) if d.isocalendar()[:2] == last_week)
+        if start == 0:
+            raise LookupError("no close before the latest week to compare with")
         return Stock(
             name=meta.get("shortName") or symbol,
             currency=meta.get("currency", ""),
-            days=closes[-days:],
-            previous_close=closes[-days - 1][1],
+            month=closes,
+            week_start=start,
         )
     except Exception as error:  # noqa: BLE001
         _warn("Stock", error)
@@ -127,43 +142,79 @@ def stock(symbol: str = STOCK_SYMBOL, days: int = 5) -> Stock | None:
 
 # --- Papers ----------------------------------------------------------------
 
+# Hugging Face is the main source: a documented public API, curated by humans
+# and ranked by upvotes. alphaXiv's "hot this week" feed is the fallback for
+# when Hugging Face is down; it is undocumented, so it may change without notice.
+# (Papers with Code, the other obvious source, was shut down in July 2025.)
 PAPERS_URL = "https://huggingface.co/api/daily_papers?week={week}&limit=100"
+ALPHAXIV_URL = "https://api.alphaxiv.org/papers/v3/feed?pageNum=0&sort=Hot&pageSize=30&interval=7%20Days"
+# The human-readable pages the "upvotes" line links to.
+HF_WEEK_PAGE = "https://huggingface.co/papers/week/{week}"
+ALPHAXIV_WEEK_PAGE = "https://www.alphaxiv.org/?sort=Hot&interval=7+Days"
+ARXIV_ID = re.compile(r"^\d{4}\.\d{4,5}$")
 
 
 @dataclass
 class Paper:
-    id: str  # arXiv id
+    id: str  # arXiv id on Hugging Face, alphaXiv's paper id otherwise
     title: str
     summary: str
     upvotes: int
-    url: str = field(init=False)
+    url: str = ""  # the article itself: arXiv when the id is an arXiv id
+    list_url: str = ""  # the source's page of this week's papers
+    source: str = "Hugging Face"
 
     def __post_init__(self):
-        self.url = f"https://huggingface.co/papers/{self.id}"
+        self.url = self.url or f"https://arxiv.org/abs/{self.id}"
+
+
+def _first_sentence(text: str) -> str:
+    return re.split(r"(?<=\.)\s", text or "")[0]
+
+
+def _hf_papers(seen: set, today: date) -> list[Paper]:
+    year, week, _ = today.isocalendar()
+    week = f"{year}-W{week:02d}"
+    items = _get_json(PAPERS_URL.format(week=week))
+    found = []
+    for item in sorted(items, key=lambda i: -i["paper"].get("upvotes", 0)):
+        paper = item["paper"]
+        if paper["id"] in seen:
+            continue
+        # ai_summary is a one-liner; fall back to the abstract's first sentence.
+        summary = paper.get("ai_summary") or _first_sentence(paper.get("summary", ""))
+        found.append(Paper(paper["id"], _squash(paper["title"]), _squash(summary),
+                           paper.get("upvotes", 0), list_url=HF_WEEK_PAGE.format(week=week)))
+    return found
+
+
+def _alphaxiv_papers(seen: set) -> list[Paper]:
+    found = []
+    for paper in _get_json(ALPHAXIV_URL)["papers"]:
+        pid = paper.get("universal_paper_id") or paper["id"]
+        if pid in seen:
+            continue
+        summary = paper.get("feed_description") or _first_sentence(paper.get("abstract", ""))
+        votes = (paper.get("metrics") or {}).get("public_total_votes") or 0
+        # Most alphaXiv papers carry their arXiv id; the rest only exist there.
+        url = "" if ARXIV_ID.match(pid) else f"https://www.alphaxiv.org/abs/{pid}"
+        found.append(Paper(pid, _squash(paper["title"]), _squash(summary), votes, url=url,
+                           list_url=ALPHAXIV_WEEK_PAGE, source="alphaXiv"))
+    return found
 
 
 def papers(seen: set, today: date | None = None, count: int = 3) -> list[Paper] | None:
-    """The week's most upvoted papers on Hugging Face that were not sent before."""
-    year, week, _ = (today or date.today()).isocalendar()
-    try:
-        items = _get_json(PAPERS_URL.format(week=f"{year}-W{week:02d}"))
-        found = []
-        for item in sorted(items, key=lambda i: -i["paper"].get("upvotes", 0)):
-            paper = item["paper"]
-            if paper["id"] in seen:
-                continue
-            # ai_summary is a one-liner; fall back to the abstract's first sentence.
-            summary = paper.get("ai_summary") or re.split(r"(?<=\.)\s", paper.get("summary", ""))[0]
-            found.append(Paper(paper["id"], _squash(paper["title"]), _squash(summary),
-                               paper.get("upvotes", 0)))
-            if len(found) == count:
-                break
-        if not found:
-            raise LookupError("no unseen papers this week")
-        return found
-    except Exception as error:  # noqa: BLE001
-        _warn("Papers", error)
-        return None
+    """The week's top papers not sent before: Hugging Face, else alphaXiv."""
+    for name, fetch in (("Hugging Face", lambda: _hf_papers(seen, today or date.today())),
+                        ("alphaXiv", lambda: _alphaxiv_papers(seen))):
+        try:
+            found = fetch()[:count]
+            if not found:
+                raise LookupError("no unseen papers this week")
+            return found
+        except Exception as error:  # noqa: BLE001
+            _warn(f"Papers from {name}", error)
+    return None
 
 
 def _squash(text: str) -> str:
@@ -189,10 +240,6 @@ class Comic:
     @property
     def url(self) -> str:
         return f"https://xkcd.com/{self.num}/"
-
-    @property
-    def explain_url(self) -> str:
-        return f"https://www.explainxkcd.com/wiki/index.php/{self.num}"
 
 
 def comic_numbers(categories=XKCD_CATEGORIES) -> set[int]:

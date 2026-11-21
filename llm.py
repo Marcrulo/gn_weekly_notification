@@ -12,10 +12,12 @@ import os
 import urllib.request
 
 DEFAULT_HOST = "http://localhost:11434"
-MODEL = "qwen3.5:9b"
+# PrismML's 1-bit Bonsai 27B (community GGUF upload; needs Ollama >= 0.32.5).
+# ~4.4GB on disk, so it fits the 16GB runner despite the 27B parameters.
+MODEL = "MobiusDevelopment/Bonsai-27B-Q1_0-gguf"
 
-# A 9B model on a 4-core runner has to load ~7.6GB off disk, read the prompt and
-# then generate a few hundred tokens. A few minutes is normal; this is the ceiling.
+# A 27B model on a 4-core CPU runner is slow per token even at 1 bit. A few
+# minutes is normal; this is the ceiling.
 TIMEOUT = 900
 
 
