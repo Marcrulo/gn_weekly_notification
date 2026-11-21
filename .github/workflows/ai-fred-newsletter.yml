@@ -1,5 +1,8 @@
 name: AI-fred's weekly newsletter
 
+# The real thing: everyone in recipients.txt. Same steps as test-send.yml; the
+# only differences are who it goes to, the Sunday schedule, and that what was
+# sent is recorded in history.json so it never repeats.
 on:
   schedule:
     # Sunday 23:05 Danish time. GitHub's cron is UTC only, and Denmark is UTC+2
@@ -9,15 +12,9 @@ on:
     # times, and the top of every hour is peak.
     - cron: "5 21 * * 0"  # 23:05 CEST (summer)
     - cron: "5 22 * * 0"  # 23:05 CET (winter)
+  # Run by hand = a real send to the whole list (e.g. after a missed Sunday).
+  # To try something out, run test-send.yml instead.
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Print the newsletter in the log instead of sending it"
-        type: boolean
-        default: true
-      to:
-        description: "Test: send only to this address (leave empty for the whole list)"
-        default: ""
 
 env:
   # Kept here rather than in llm.py so the model can be swapped without
@@ -55,7 +52,7 @@ jobs:
     if: ${{ needs.timing.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     # Write access so the job can commit history.json (what was already sent)
-    # back to the repo after a real send.
+    # back to the repo after the send.
     permissions:
       contents: write
     steps:
@@ -69,10 +66,9 @@ jobs:
         run: python -m unittest discover -s tests
 
       # --- Local model -----------------------------------------------------
-      # AI-fred's greeting, letter and farewell are written fresh each week by
-      # a model running on this runner. Nothing here needs a key: llm.py talks
-      # to it over localhost. If any of this fails, the newsletter still goes
-      # out with AI-fred's template words.
+      # AI-fred's words are written fresh each week by a model running on this
+      # runner; llm.py talks to it over localhost, no key needed. If any of
+      # this fails, the newsletter still goes out with his template words.
       - name: Install Ollama
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
@@ -83,9 +79,9 @@ jobs:
           sudo systemctl stop ollama 2>/dev/null || true
           sudo systemctl disable ollama 2>/dev/null || true
 
-      # ~4.4GB of weights (Bonsai 27B, 1-bit). Restoring beats re-downloading, but GitHub evicts
-      # caches after 7 days of no access and this job runs every 7 days, so
-      # expect an occasional miss - it just falls back to pulling.
+      # ~4.4GB of weights (Bonsai 27B, 1-bit). GitHub evicts caches after 7 days
+      # without a hit and this runs every 7 days, so expect the occasional miss
+      # - it just falls back to pulling.
       - name: Cache the model
         uses: actions/cache@v4
         with:
@@ -97,9 +93,8 @@ jobs:
           export OLLAMA_MODELS="$HOME/.ollama/models"
           # nohup so the server outlives this step's shell - later steps need it.
           nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
-          # Poll rather than sleep blindly: the server is usually up in ~1s,
-          # but a cold runner can take longer and a fixed sleep would either
-          # waste time or flake.
+          # Poll rather than sleep blindly: usually up in ~1s, but a cold runner
+          # can take longer.
           for i in $(seq 1 30); do
             curl -sf http://localhost:11434/api/tags >/dev/null && break
             sleep 1
@@ -107,33 +102,27 @@ jobs:
           curl -sf http://localhost:11434/api/tags >/dev/null \
             || { echo "Ollama did not come up"; exit 1; }
           ollama pull "$OLLAMA_MODEL"
-          # Fail loudly here rather than quietly mail template words because
-          # the weights never arrived.
+          # Fail loudly rather than quietly mail template words because the
+          # weights never arrived.
           ollama list | grep -q "$OLLAMA_MODEL" \
             || { echo "$OLLAMA_MODEL is not available"; exit 1; }
       # ---------------------------------------------------------------------
 
       # One step builds and sends, so the issue printed in the log is exactly
-      # the one that was mailed (the comic is random, the letter is sampled).
-      # Server and mailing list live in the repo (notify.py, recipients.txt).
-      # The app password is the only secret.
-      - name: Build and send
+      # the one that was mailed. Timed, so the log shows how long it took.
+      - name: Build and send to everyone in recipients.txt
         env:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          DRY_RUN: ${{ inputs.dry_run }}
-          TO: ${{ inputs.to }}
-        run: |
-          args=()
-          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
-          if [ -n "$TO" ]; then args+=(--to "$TO"); fi
-          python notify.py "${args[@]}"
+        run: time python notify.py
+
+      # If AI-fred fell back to his template words, this shows why.
+      - name: Ollama log
+        if: always()
+        run: tail -n 50 "$RUNNER_TEMP/ollama.log" || true
 
       # notify.py appended this week's joke id, paper ids and xkcd number to
-      # history.json (only on a send to the whole list); commit it so next
-      # week skips them. Without this the newsletter would repeat itself.
+      # history.json; commit it so next week skips them.
       - name: Remember what was sent
-        # On the schedule `inputs` is empty, so both are falsy and this runs.
-        if: ${{ !inputs.dry_run && !inputs.to }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

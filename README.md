@@ -161,7 +161,7 @@ delete it from the file.
 | --- | --- |
 | SMTP server, port, account, From | `SMTP_HOST` … `MAIL_FROM` at the top of `notify.py` |
 | Mailing list | `recipients.txt` |
-| Who may be mailed at all | `ALLOWED_RECIPIENTS` in `notify.py` — anything else is refused, `--to` included |
+| Who may be mailed at all | Only addresses in `recipients.txt` — `--to` included; anything else is refused |
 | **App password** | GitHub secret `SMTP_PASSWORD` — the only secret |
 | AI-fred's model | No secret: it runs on the runner |
 
@@ -188,13 +188,15 @@ cache (or pull it) → **build and send** → commit `history.json`. Building an
 sending is a single step, and the plain-text issue is printed to the log, so
 the log shows exactly what was mailed.
 
-**Run workflow** from the Actions tab takes two inputs:
+The two workflows run the same steps:
 
-- `dry_run` (default **on**): print the issue to the log, send nothing.
-- `to`: send only to this address — a real send, with the secret, that leaves
-  `history.json` alone. The way to test the real thing end to end.
+| Workflow | When | Sends to | `history.json` |
+| --- | --- | --- | --- |
+| `ai-fred-newsletter.yml` | Sunday 23:05, or **Run workflow** | everyone in `recipients.txt` | updated and committed |
+| `test-send.yml` | **Run workflow** only | marcus.presutti.eu@gmail.com | untouched |
 
-The scheduled run always sends to the whole list.
+Running the full one by hand is a real send to everyone (for a missed Sunday,
+say). To try a change, run the test one.
 
 Notes on the Ollama steps:
 

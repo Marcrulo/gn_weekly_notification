@@ -6,13 +6,11 @@
 # Everyone gets their own mail, so recipients cannot see each other.
 # Edit, commit, push - the next Sunday run picks it up. No secrets needed.
 
-# For now only Master Presutti receives it (see ALLOWED_RECIPIENTS in notify.py).
-# Uncomment a line AND add the address there to put someone back on the list.
 Master Presutti <marcus.presutti.eu@gmail.com>
-# Dr. Bott abott@gnhearing.com
-# Master Martz rmartz@gnhearing.com
-# Master Dyssegard cdyssegard@gnhearing.com
-# Master Presutti <mpresutti@gnhearing.com>
-# Master Olesen jaolesen@gnhearing.com
-# Kris Sørensen kkegelsorensen@gnhearing.com
-# Miss Leschly eleschly@gnhearing.com
+Dr. Bott abott@gnhearing.com
+Master Martz rmartz@gnhearing.com
+Master Dyssegard cdyssegard@gnhearing.com
+Master Presutti <mpresutti@gnhearing.com>
+Master Olesen jaolesen@gnhearing.com
+Kris Sørensen kkegelsorensen@gnhearing.com
+Miss Leschly eleschly@gnhearing.com

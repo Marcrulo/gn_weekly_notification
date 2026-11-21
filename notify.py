@@ -36,20 +36,20 @@ MAIL_FROM = SMTP_USER  # Gmail rewrites From to the authenticated account anyway
 # One person per line; '#' starts a comment. Edit this file to change the list.
 RECIPIENTS_FILE = Path(__file__).resolve().parent / "recipients.txt"
 
-# Hard safety net while the newsletter is being tried out: nothing is ever sent
-# to an address outside this set - not from recipients.txt, not via --to, not
-# from the workflow's `to` input. Add an address here (and uncomment it in
-# recipients.txt) to widen the audience.
-ALLOWED_RECIPIENTS = {"marcus.presutti.eu@gmail.com"}
 # ---------------------------------------------------------------------------
 
 
-def check_allowed(addresses: list[str], allowed: set[str] = ALLOWED_RECIPIENTS) -> None:
-    """Refuse the whole send if any address is outside the allowlist."""
-    blocked = [a for a in addresses if a.lower() not in {x.lower() for x in allowed}]
+def check_allowed(addresses: list[str], allowed: list[str] | None = None) -> None:
+    """Refuse the whole send if any address is not on the mailing list.
+
+    recipients.txt is the only list: a --to test can pick someone from it, but
+    can never mail anyone outside it (a typo, a stray address).
+    """
+    allowed_set = {a.lower() for a in (recipients() if allowed is None else allowed)}
+    blocked = [a for a in addresses if a.lower() not in allowed_set]
     if blocked:
         raise SystemExit(
-            f"Refusing to send: {', '.join(blocked)} not in ALLOWED_RECIPIENTS (notify.py)."
+            f"Refusing to send: {', '.join(blocked)} not in {RECIPIENTS_FILE.name}."
         )
 
 

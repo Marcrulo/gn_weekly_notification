@@ -92,13 +92,16 @@ class TestNoRepeats(Stubbed):
 
 
 class TestSafety(unittest.TestCase):
-    def test_only_the_allowlist_is_mailed(self):
-        notify.check_allowed(["marcus.presutti.eu@gmail.com", "Marcus.Presutti.EU@gmail.com"])
+    def test_only_the_mailing_list_is_mailed(self):
+        listed = ["marcus.presutti.eu@gmail.com", "abott@gnhearing.com"]
+        notify.check_allowed(["Marcus.Presutti.EU@gmail.com", "abott@gnhearing.com"], listed)
         with self.assertRaises(SystemExit):
-            notify.check_allowed(["marcus.presutti.eu@gmail.com", "abott@gnhearing.com"])
+            notify.check_allowed(["marcus.presutti.eu@gmail.com", "stranger@x.dk"], listed)
 
-    def test_repo_list_is_inside_the_allowlist(self):
+    def test_the_whole_list_is_on(self):
+        self.assertEqual(len(notify.recipients()), 8)
         notify.check_allowed(notify.recipients())
+        notify.check_allowed(["marcus.presutti.eu@gmail.com"])  # what test-send.yml uses
 
     def test_mail_carries_the_comic_as_an_inline_image(self):
         sent = []
