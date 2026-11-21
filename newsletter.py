@@ -114,6 +114,8 @@ Write three pieces, in that voice, new every week - never reuse a stock line:
 - letter: a short intro of at most two short sentences, under 35 words, presenting
   the issue as a butler presents a tray. Keep it general: do not mention any
   numbers, share prices, papers, comics or jokes - the reader finds those below.
+  The four sections are GN stock prices, a comic strip, popular machine learning
+  papers this week, and a joke.
 - farewell: two or three sentences, under 60 words. The newsletter arrives on
   Sunday evening and a new working week begins tomorrow, Monday - this mail is
   the first thing of that week. Send the reader off into the week ahead with a
